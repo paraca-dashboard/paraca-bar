@@ -287,10 +287,10 @@ tr:last-child td{border-bottom:none;}
       <h2>&#129534; Fatture Fornitori</h2>
       <p class="desc">Carica le fatture elettroniche XML. La dashboard legge automaticamente fornitore, data e importo.</p>
       <div class="upload-zone" id="uzXml" ondragover="dragOver(event,'uzXml')" ondragleave="dragLeave('uzXml')" ondrop="dropXml(event)">
-        <input type="file" accept=".xml,.p7m" multiple onchange="handleXmlFiles(this)">
+        <input type="file" accept=".xml,.p7m,.pdf,image/*" multiple onchange="handleXmlFiles(this)">
         <div class="uz-icon">&#129534;</div>
         <div class="uz-title">Trascina o clicca</div>
-        <div class="uz-sub">Uno o più file .xml</div>
+        <div class="uz-sub">File .xml oppure PDF/immagine</div>
       </div>
       <div id="previewXml" class="preview-box">
         <div class="preview-title">&#10024; Fatture lette — controlla e conferma</div>
@@ -769,6 +769,32 @@ function processXmlFiles(files){
   files.forEach(function(file,i){
     var reader=new FileReader();
     reader.onload=function(ev){
+      // Check if it's a PDF or image - use AI
+      if(file.type==='application/pdf'||file.type.startsWith('image/')){
+        var base64=ev.target.result.split(',')[1];
+        var contentBlock=file.type.startsWith('image/')
+          ?{type:'image',source:{type:'base64',media_type:file.type,data:base64}}
+          :{type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}};
+        fetch('https://api.anthropic.com/v1/messages',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:300,
+            messages:[{role:'user',content:[contentBlock,
+              {type:'text',text:'Sei un assistente che legge fatture italiane. Estrai: nome del fornitore/azienda emittente, data della fattura (formato YYYY-MM-DD), importo totale in euro IVA inclusa. Rispondi SOLO con JSON: {"fornitore":"...","data":"YYYY-MM-DD","importo":0.00}'}
+            ]}]})
+        })
+        .then(function(r){return r.json();})
+        .then(function(aiData){
+          var text=aiData.content.map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
+          var p=JSON.parse(text);
+          results[i]={nome:p.fornitore||file.name,data:p.data||new Date().toISOString().slice(0,10),importo:p.importo||0,file:file.name};
+          if(++done===files.length){pendingXml=results;showXmlPreview(results);}
+        })
+        .catch(function(){
+          results[i]={nome:file.name,data:new Date().toISOString().slice(0,10),importo:0,file:file.name,err:true};
+          if(++done===files.length){pendingXml=results;showXmlPreview(results);}
+        });
+        return;
+      }
       try{
         var parser=new DOMParser();
         var xml=parser.parseFromString(ev.target.result,'text/xml');
@@ -797,7 +823,11 @@ function processXmlFiles(files){
       done++;
       if(done===files.length){pendingXml=results;showXmlPreview(results);}
     };
-    reader.readAsText(file,'UTF-8');
+    if(file.type==='application/pdf'||file.type.startsWith('image/')){
+      reader.readAsDataURL(file);
+    } else {
+      reader.readAsText(file,'UTF-8');
+    }
   });
 }
 
@@ -838,7 +868,7 @@ function dropBusta(e){e.preventDefault();processBusta(e.dataTransfer.files[0]);}
 function processBusta(file){
   var preview=document.getElementById('previewBusta');
   preview.classList.add('show');
-  preview.innerHTML='<div class="ai-loading"><div class="spinner"></div><div>AI in lettura...</div></div>';
+  preview.innerHTML='<div class="ai-loading"><div class="spinner"></div><div>AI in lettura di tutti i dipendenti...</div></div>';
   var reader=new FileReader();
   reader.onload=function(ev){
     var base64=ev.target.result.split(',')[1];
@@ -852,46 +882,63 @@ function processBusta(file){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         model:'claude-sonnet-4-20250514',
-        max_tokens:300,
+        max_tokens:2000,
         messages:[{role:'user',content:[
           contentBlock,
-          {type:'text',text:'Sei un assistente che legge buste paga italiane. Estrai: nome e cognome del dipendente, mese e anno di riferimento (formato YYYY-MM), stipendio netto in euro. Rispondi SOLO con JSON valido: {"nome":"...","mese":"YYYY-MM","stipendio":0.00}'}
+          {type:'text',text:'Sei un assistente che legge cedolini paga italiani. Questo documento può contenere uno o più dipendenti. Per ogni dipendente estrai: nome e cognome, mese e anno di riferimento (formato YYYY-MM), netto busta (stipendio netto) in euro. Rispondi SOLO con un array JSON valido senza markdown, anche se c\'è un solo dipendente: [{"nome":"...","mese":"YYYY-MM","stipendio":0.00}]'}
         ]}]
       })
     })
     .then(function(r){return r.json();})
     .then(function(data){
       var text=data.content.map(function(c){return c.text||'';}).join('').replace(/```json|```/g,'').trim();
-      var p=JSON.parse(text);
-      preview.innerHTML=
-        '<div class="preview-title">✨ Dati estratti — controlla e conferma</div>'+
-        '<div class="ai-field"><label>Dipendente</label><input type="text" id="aiPerNome" value="'+(p.nome||'')+'"></div>'+
-        '<div class="ai-field"><label>Mese</label><input type="month" id="aiPerMese" value="'+(p.mese||'')+'"></div>'+
-        '<div class="ai-field"><label>Stipendio €</label><input type="number" id="aiPerStipendio" value="'+(p.stipendio||'')+'" step="0.01"></div>'+
-        '<button class="btn btn-success" onclick="confermaBusta()" style="margin-top:8px;">✅ Conferma e Salva</button>';
+      var list=JSON.parse(text);
+      if(!Array.isArray(list)) list=[list];
+      // Show preview of all employees
+      var html='<div class="preview-title">✨ '+list.length+' dipendent'+(list.length===1?'e':'i')+' trovat'+(list.length===1?'o':'i')+' — controlla e conferma</div>';
+      list.forEach(function(p,i){
+        html+='<div style="background:var(--off-white);border-radius:8px;padding:10px 12px;margin-bottom:8px;">'+
+          '<div style="font-size:0.7rem;color:var(--muted);font-weight:600;margin-bottom:6px;text-transform:uppercase;">Dipendente '+(i+1)+'</div>'+
+          '<div class="ai-field"><label>Nome</label><input type="text" id="bp_nome_'+i+'" value="'+(p.nome||'')+'"></div>'+
+          '<div class="ai-field"><label>Mese</label><input type="month" id="bp_mese_'+i+'" value="'+(p.mese||'')+'"></div>'+
+          '<div class="ai-field"><label>Netto €</label><input type="number" id="bp_stip_'+i+'" value="'+(p.stipendio||'')+'" step="0.01"></div>'+
+          '</div>';
+      });
+      html+='<button class="btn btn-success" onclick="confermaBusta('+list.length+')" style="margin-top:8px;">✅ Salva tutti</button>';
+      preview.innerHTML=html;
     })
-    .catch(function(){
+    .catch(function(err){
       preview.innerHTML=
         '<div class="preview-title" style="color:var(--red)">⚠️ Inserisci manualmente</div>'+
-        '<div class="ai-field"><label>Dipendente</label><input type="text" id="aiPerNome"></div>'+
-        '<div class="ai-field"><label>Mese</label><input type="month" id="aiPerMese"></div>'+
-        '<div class="ai-field"><label>Stipendio €</label><input type="number" id="aiPerStipendio" step="0.01"></div>'+
-        '<button class="btn btn-success" onclick="confermaBusta()" style="margin-top:8px;">💾 Salva</button>';
+        '<div class="ai-field"><label>Dipendente</label><input type="text" id="bp_nome_0"></div>'+
+        '<div class="ai-field"><label>Mese</label><input type="month" id="bp_mese_0"></div>'+
+        '<div class="ai-field"><label>Stipendio €</label><input type="number" id="bp_stip_0" step="0.01"></div>'+
+        '<button class="btn btn-success" onclick="confermaBusta(1)" style="margin-top:8px;">💾 Salva</button>';
     });
   };
   reader.readAsDataURL(file);
 }
 
-function confermaBusta(){
-  var nome=document.getElementById('aiPerNome').value.trim();
-  var mese=document.getElementById('aiPerMese').value;
-  var stipendio=parseFloat(document.getElementById('aiPerStipendio').value);
-  if(!nome||!mese||isNaN(stipendio)){toast('⚠️ Controlla i campi');return;}
+function confermaBusta(count){
+  count=count||1;
   var d=getData();
-  var idx=d.personale.findIndex(function(p){return p.mese===mese&&p.nome===nome;});
-  if(idx>=0)d.personale[idx].stipendio=stipendio;
-  else d.personale.push({id:Date.now()+'',mese:mese,nome:nome,stipendio:stipendio,fonte:'AI 🤖'});
-  setData(d);toast('✅ Stipendio salvato!');
+  var saved=0;
+  for(var i=0;i<count;i++){
+    var nome=document.getElementById('bp_nome_'+i);
+    var mese=document.getElementById('bp_mese_'+i);
+    var stip=document.getElementById('bp_stip_'+i);
+    if(!nome||!mese||!stip) continue;
+    var n=nome.value.trim();
+    var m=mese.value;
+    var s=parseFloat(stip.value);
+    if(!n||!m||isNaN(s)) continue;
+    var idx=d.personale.findIndex(function(p){return p.mese===m&&p.nome===n;});
+    if(idx>=0) d.personale[idx].stipendio=s;
+    else d.personale.push({id:Date.now()+'_'+i,mese:m,nome:n,stipendio:s,fonte:'AI 🤖'});
+    saved++;
+  }
+  setData(d);
+  toast('✅ '+saved+' stipend'+(saved===1?'io':'i')+' salvat'+(saved===1?'o':'i')+'!');
   document.getElementById('previewBusta').classList.remove('show');
   document.getElementById('uzBusta').querySelector('input').value='';
 }
