@@ -775,8 +775,8 @@ function processXmlFiles(files){
         var contentBlock=file.type.startsWith('image/')
           ?{type:'image',source:{type:'base64',media_type:file.type,data:base64}}
           :{type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}};
-        fetch('https://api.anthropic.com/v1/messages',{
-          method:'POST',headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true','x-api-key':'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'},
+        fetch('https://paraca-backend-production.up.railway.app/ai',{
+          method:'POST',headers:{'Content-Type':'application/json'},
           body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:300,
             messages:[{role:'user',content:[contentBlock,
               {type:'text',text:'Sei un assistente che legge fatture italiane. Estrai: nome del fornitore/azienda emittente, data della fattura (formato YYYY-MM-DD), importo totale in euro IVA inclusa. Rispondi SOLO con JSON: {"fornitore":"...","data":"YYYY-MM-DD","importo":0.00}'}
@@ -877,9 +877,9 @@ function processBusta(file){
     var contentBlock=isImage
       ?{type:'image',source:{type:'base64',media_type:mediaType,data:base64}}
       :{type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}};
-    fetch('https://api.anthropic.com/v1/messages',{
+    fetch('https://paraca-backend-production.up.railway.app/ai',{
       method:'POST',
-      headers:{'Content-Type':'application/json','anthropic-dangerous-direct-browser-access':'true','x-api-key':'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'},
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
         model:'claude-sonnet-4-20250514',
         max_tokens:2000,
